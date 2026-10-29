@@ -129,13 +129,14 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
             400
           );
 
-          // Use 210mm A4 width; calculate height proportionally
+          // Equal margins on all sides — 8mm uniform
           const CARD_WIDTH_PX = isProposal ? 800 : WINDOW_WIDTH;
-          const marginMm = 8;
+          const marginMm = 8; // same on top, bottom, left, right
           const pdfWidthMm = 210;
           const printableWidthMm = pdfWidthMm - marginMm * 2; // 194mm
           const contentHeightMm = (elementHeightPx / CARD_WIDTH_PX) * printableWidthMm;
-          const pdfHeightMm = Math.max(130, Math.ceil(contentHeightMm + marginMm * 2 + 6));
+          // +marginMm*2 for top+bottom margins, equal to left+right
+          const pdfHeightMm = Math.max(130, Math.ceil(contentHeightMm + marginMm * 2));
 
           const opt = {
             margin: [marginMm, marginMm, marginMm, marginMm],
