@@ -57,11 +57,19 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
 
   // 2. Client-side html2pdf fallback
   return new Promise((resolve, reject) => {
-    // 1. Parse HTML content
+    // Parse HTML content
     const parser = new DOMParser();
     const parsed = parser.parseFromString(htmlContent, 'text/html');
 
-    // 2. Inject all stylesheet rules into document.head so html2canvas computes all styles perfectly
+    // Detect if this is a proposal (.a4-page) so we use wider settings
+    // Proposal card is 800px — needs 900px window (50px margin each side)
+    const isProposal = !!(
+      parsed.querySelector('.a4-page') ||
+      parsed.querySelector('.proposal-doc, .proposal-container, .proposal-root, .proposal')
+    );
+    const RENDER_WIDTH = isProposal ? 900 : 800;
+
+    // Inject all stylesheet rules into document.head so html2canvas computes all styles perfectly
     const styleEl = document.createElement('style');
     styleEl.setAttribute('data-pdf-runtime-style', 'true');
     let allCss = '';
@@ -71,13 +79,13 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
     styleEl.textContent = allCss;
     document.head.appendChild(styleEl);
 
-    // 3. Create a staging container directly in document.body behind current view
+    // Create a staging container directly in document.body behind current view
     const staging = document.createElement('div');
     staging.id = 'pdf-staging-container';
     staging.style.position = 'fixed';
     staging.style.left = '0px';
     staging.style.top = '0px';
-    staging.style.width = '750px';
+    staging.style.width = `${RENDER_WIDTH}px`;
     staging.style.zIndex = '-99999';
     staging.style.opacity = '1';
     staging.style.pointerEvents = 'none';
@@ -86,7 +94,6 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
     staging.style.padding = '0';
     staging.style.boxSizing = 'border-box';
 
-
     if (parsed.body) {
       staging.innerHTML = parsed.body.innerHTML;
     } else {
@@ -94,46 +101,59 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
     }
     document.body.appendChild(staging);
 
-    // 4. Allow layout calculation and CSSOM attachment in next render frame
+    // Allow layout calculation and CSSOM attachment in next render frame
     requestAnimationFrame(() => {
       setTimeout(async () => {
         try {
-          const targetElement = staging.querySelector('.a4-page') || 
-                                staging.querySelector('.inv-container') || 
-                                staging.querySelector('.statement') || 
-                                staging.querySelector('.invoice') || 
-                                staging.firstElementChild || 
+          const targetElement = staging.querySelector('.a4-page') ||
+                                staging.querySelector('.inv-container') ||
+                                staging.querySelector('.statement') ||
+                                staging.querySelector('.invoice') ||
+                                staging.firstElementChild ||
                                 staging;
 
-          // Force exact zero horizontal offset and 750px width on targetElement
-          targetElement.style.margin = '0';
-          targetElement.style.marginLeft = '0';
-          targetElement.style.marginRight = '0';
-          targetElement.style.width = '750px';
-          targetElement.style.maxWidth = '750px';
-          targetElement.style.boxSizing = 'border-box';
+          if (isProposal) {
+            // Proposal: DO NOT override width — let the 800px card stay centered in 900px staging
+            targetElement.style.boxSizing = 'border-box';
+          } else {
+            // Invoice/Statement: force to fill RENDER_WIDTH
+            targetElement.style.margin = '0';
+            targetElement.style.marginLeft = '0';
+            targetElement.style.marginRight = '0';
+            targetElement.style.width = `${RENDER_WIDTH}px`;
+            targetElement.style.maxWidth = `${RENDER_WIDTH}px`;
+            targetElement.style.boxSizing = 'border-box';
+          }
 
-          // Calculate exact content height in mm so PDF doesn't have trailing blank space
-          const elementHeightPx = targetElement.scrollHeight || targetElement.offsetHeight || 800;
-          const elementWidthPx = 750;
-          const marginMm = 8;
-          const pdfWidthMm = 210;
-          const printableWidthMm = pdfWidthMm - (marginMm * 2); // 194mm (centered: 8mm left, 8mm right)
-          const contentHeightMm = (elementHeightPx / elementWidthPx) * printableWidthMm;
-          const pdfHeightMm = Math.max(130, Math.ceil(contentHeightMm + (marginMm * 2) + 6));
+          // Extra wait for layout reflow after resize
+          await new Promise((r) => setTimeout(r, 100));
+
+          // Measure full scrollable height
+          const elementHeightPx = Math.max(
+            staging.scrollHeight,
+            targetElement.scrollHeight,
+            targetElement.offsetHeight,
+            800
+          );
+
+          // Calculate PDF page dimensions (pixel-perfect, no A4 page breaks)
+          const marginMm = isProposal ? 0 : 8;
+          // Convert px to mm: 1px = 0.264583mm at 96dpi
+          const pdfWidthMm  = Math.round(RENDER_WIDTH * 0.264583);
+          const pdfHeightMm = Math.round(elementHeightPx * 0.264583) + (marginMm * 2) + 10;
 
           const opt = {
             margin: [marginMm, marginMm, marginMm, marginMm],
             filename: fileName,
-            image: { type: 'jpeg', quality: 0.95 },
+            image: { type: 'jpeg', quality: 0.97 },
             html2canvas: {
-              scale: 1.8,
+              scale: 2,
               useCORS: true,
               letterRendering: true,
               logging: false,
               backgroundColor: '#ffffff',
-              width: 750,
-              windowWidth: 750,
+              width: RENDER_WIDTH,
+              windowWidth: RENDER_WIDTH,
               x: 0,
               y: 0,
               scrollX: 0,
@@ -143,7 +163,9 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
             pagebreak: { mode: 'avoid-all' }
           };
 
-          const pdfBlob = await html2pdf().set(opt).from(targetElement).output('blob');
+          // For proposals render the full staging div (includes body padding) for correct centering
+          const renderTarget = isProposal ? staging : targetElement;
+          const pdfBlob = await html2pdf().set(opt).from(renderTarget).output('blob');
           resolve(pdfBlob);
         } catch (err) {
           console.error('PDF render error:', err);
