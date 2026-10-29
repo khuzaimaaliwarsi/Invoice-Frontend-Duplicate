@@ -461,50 +461,8 @@ export default function DashboardPage() {
             </span>
           </div>
 
-          {/* Active Tags & Filter Selector matching reference */}
+          {/* Filter Selector */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{
-              fontSize: '11px',
-              fontWeight: 600,
-              background: '#f4f4f5',
-              color: '#3f3f46',
-              padding: '4px 9px',
-              borderRadius: '6px',
-              border: '1px solid #e4e4e7',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px'
-            }}>
-              Warsi Foods <span style={{ color: '#a1a1aa', fontSize: '10px' }}>✕</span>
-            </span>
-            <span style={{
-              fontSize: '11px',
-              fontWeight: 600,
-              background: '#f4f4f5',
-              color: '#3f3f46',
-              padding: '4px 9px',
-              borderRadius: '6px',
-              border: '1px solid #e4e4e7',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px'
-            }}>
-              Bussiness-01 <span style={{ color: '#a1a1aa', fontSize: '10px' }}>✕</span>
-            </span>
-            <span style={{
-              fontSize: '11px',
-              fontWeight: 600,
-              background: '#f4f4f5',
-              color: '#3f3f46',
-              padding: '4px 9px',
-              borderRadius: '6px',
-              border: '1px solid #e4e4e7',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px'
-            }}>
-              WhatsApp <span style={{ color: '#a1a1aa', fontSize: '10px' }}>✕</span>
-            </span>
             <span style={{
               fontSize: '11.5px',
               color: '#71717a',
