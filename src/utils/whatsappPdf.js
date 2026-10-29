@@ -35,15 +35,22 @@ function triggerDownload(blob, fileName) {
 
 /**
  * High-precision HTML-to-PDF engine using backend Chrome/Puppeteer API + client fallback.
+ * Super fast, equal margins, 0 blank trailing pages, 1-click instant download.
  */
 export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
-  // 1. First try ultra-fast backend Puppeteer Chrome engine
+  // 1. Ultra-fast backend Puppeteer Chrome engine (with 4s timeout abort)
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+
     const res = await fetch('/api/pdf/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ html: htmlContent, fileName })
+      body: JSON.stringify({ html: htmlContent, fileName }),
+      signal: controller.signal
     });
+    clearTimeout(timer);
+
     if (res.ok) {
       const blob = await res.blob();
       if (blob && blob.size > 100) {
@@ -51,22 +58,20 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
       }
     }
   } catch (backendErr) {
-    console.warn('Backend PDF generation fallback to client-side html2pdf:', backendErr.message);
+    console.warn('Backend PDF fallback to fast client-side engine:', backendErr.message);
   }
 
-  // 2. Client-side html2pdf fallback
+  // 2. Fast Client-side html2pdf fallback
   return new Promise((resolve, reject) => {
     const parser = new DOMParser();
     const parsed = parser.parseFromString(htmlContent, 'text/html');
 
-    // Proposal (.a4-page) card = 800px → needs at least 900px window to avoid clipping
     const isProposal = !!(
       parsed.querySelector('.a4-page') ||
       parsed.querySelector('.proposal-doc, .proposal-container, .proposal-root, .proposal')
     );
     const WINDOW_WIDTH = isProposal ? 900 : 800;
 
-    // Inject styles into document head
     const styleEl = document.createElement('style');
     styleEl.setAttribute('data-pdf-runtime-style', 'true');
     let allCss = '';
@@ -76,7 +81,6 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
     styleEl.textContent = allCss;
     document.head.appendChild(styleEl);
 
-    // Staging container (hidden, off-screen)
     const staging = document.createElement('div');
     staging.id = 'pdf-staging-container';
     staging.style.position = 'absolute';
@@ -107,10 +111,8 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
                                 staging;
 
           if (isProposal) {
-            // Keep card width at 800px — just ensure box-sizing is correct
             targetElement.style.boxSizing = 'border-box';
           } else {
-            // Force invoice/statement to fill the window width
             targetElement.style.margin = '0';
             targetElement.style.marginLeft = '0';
             targetElement.style.marginRight = '0';
@@ -119,31 +121,28 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
             targetElement.style.boxSizing = 'border-box';
           }
 
-          // Wait for reflow
-          await new Promise((r) => setTimeout(r, 80));
+          await new Promise((r) => setTimeout(r, 30));
 
-          // Measure height from targetElement
           const elementHeightPx = Math.max(
             targetElement.scrollHeight,
             targetElement.offsetHeight,
             400
           );
 
-          // Equal margins on all sides — 8mm uniform
+          // Perfectly uniform margins on all four sides: top == bottom, left == right
           const CARD_WIDTH_PX = isProposal ? 800 : WINDOW_WIDTH;
-          const marginMm = 8; // same on top, bottom, left, right
+          const marginMm = isProposal ? 9 : 8; // uniform margin
           const pdfWidthMm = 210;
-          const printableWidthMm = pdfWidthMm - marginMm * 2; // 194mm
+          const printableWidthMm = pdfWidthMm - (marginMm * 2);
           const contentHeightMm = (elementHeightPx / CARD_WIDTH_PX) * printableWidthMm;
-          // +marginMm*2 for top+bottom margins, equal to left+right
-          const pdfHeightMm = Math.max(130, Math.ceil(contentHeightMm + marginMm * 2));
+          const pdfHeightMm = Math.max(130, Math.ceil(contentHeightMm + (marginMm * 2) + 2));
 
           const opt = {
             margin: [marginMm, marginMm, marginMm, marginMm],
             filename: fileName,
-            image: { type: 'jpeg', quality: 0.97 },
+            image: { type: 'jpeg', quality: 0.95 },
             html2canvas: {
-              scale: 2,
+              scale: 1.8,
               useCORS: true,
               letterRendering: true,
               logging: false,
@@ -168,7 +167,7 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
           staging.remove();
           styleEl.remove();
         }
-      }, 50);
+      }, 25);
     });
   });
 }
