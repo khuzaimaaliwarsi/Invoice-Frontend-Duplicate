@@ -1,6 +1,8 @@
 import html2pdf from 'html2pdf.js';
 import { whatsappApi } from '../services/api';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
 /**
  * Convert Blob to base64 string
  */
@@ -34,16 +36,18 @@ function triggerDownload(blob, fileName) {
 }
 
 /**
- * High-precision HTML-to-PDF engine using backend Chrome/Puppeteer API + client fallback.
- * Super fast, equal margins, 0 blank trailing pages, 1-click instant download.
+ * High-precision HTML-to-PDF engine:
+ * 1. Tries backend Puppeteer (with 3.5s timeout)
+ * 2. Ultra-precise client-side fallback (100% equal margins, zero cut-off, single-page guarantee)
  */
 export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
-  // 1. Ultra-fast backend Puppeteer Chrome engine (with 4s timeout abort)
+  // 1. Try Backend Puppeteer engine (works locally and on full VPS)
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4500);
+    const timer = setTimeout(() => controller.abort(), 3500);
 
-    const res = await fetch('/api/pdf/generate', {
+    const backendUrl = API_BASE_URL.replace(/\/+$/, '') + '/pdf/generate';
+    const res = await fetch(backendUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ html: htmlContent, fileName }),
@@ -58,10 +62,10 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
       }
     }
   } catch (backendErr) {
-    console.warn('Backend PDF fallback to fast client-side engine:', backendErr.message);
+    // Expected on Vercel/serverless environments without Chrome binary
   }
 
-  // 2. Fast Client-side html2pdf fallback
+  // 2. High-Precision Client-Side Engine (Perfect for Vercel Live Deployments)
   return new Promise((resolve, reject) => {
     const parser = new DOMParser();
     const parsed = parser.parseFromString(htmlContent, 'text/html');
@@ -70,8 +74,33 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
       parsed.querySelector('.a4-page') ||
       parsed.querySelector('.proposal-doc, .proposal-container, .proposal-root, .proposal')
     );
-    const WINDOW_WIDTH = isProposal ? 900 : 800;
 
+    // Create an overlay staging container at (0, 0) for reliable coordinate math
+    const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.top = '0';
+    container.style.left = '0';
+    const targetWidth = isProposal ? 800 : 780;
+    container.style.width = `${targetWidth}px`;
+    container.style.zIndex = '999999';
+    container.style.background = '#ffffff';
+    container.style.boxSizing = 'border-box';
+    container.style.pointerEvents = 'none';
+
+    const card = parsed.querySelector('.a4-page') ||
+                 parsed.querySelector('.inv-container') ||
+                 parsed.querySelector('.statement') ||
+                 parsed.querySelector('.invoice') ||
+                 parsed.body.firstElementChild;
+
+    card.style.margin = '0';
+    card.style.width = `${targetWidth}px`;
+    card.style.maxWidth = `${targetWidth}px`;
+    card.style.boxSizing = 'border-box';
+    container.appendChild(card);
+    document.body.appendChild(container);
+
+    // Inject stylesheet
     const styleEl = document.createElement('style');
     styleEl.setAttribute('data-pdf-runtime-style', 'true');
     let allCss = '';
@@ -81,93 +110,48 @@ export async function htmlToPdfBlob(htmlContent, fileName = 'document.pdf') {
     styleEl.textContent = allCss;
     document.head.appendChild(styleEl);
 
-    const staging = document.createElement('div');
-    staging.id = 'pdf-staging-container';
-    staging.style.position = 'absolute';
-    staging.style.left = '-99999px';
-    staging.style.top = '0px';
-    staging.style.width = `${WINDOW_WIDTH}px`;
-    staging.style.zIndex = '-1';
-    staging.style.background = '#ffffff';
-    staging.style.margin = '0';
-    staging.style.padding = '0';
-    staging.style.boxSizing = 'border-box';
-
-    if (parsed.body) {
-      staging.innerHTML = parsed.body.innerHTML;
-    } else {
-      staging.innerHTML = htmlContent;
-    }
-    document.body.appendChild(staging);
-
     requestAnimationFrame(() => {
       setTimeout(async () => {
         try {
-          const targetElement = staging.querySelector('.a4-page') ||
-                                staging.querySelector('.inv-container') ||
-                                staging.querySelector('.statement') ||
-                                staging.querySelector('.invoice') ||
-                                staging.firstElementChild ||
-                                staging;
+          const cardH = container.scrollHeight || container.offsetHeight || 800;
 
-          if (isProposal) {
-            targetElement.style.boxSizing = 'border-box';
-          } else {
-            targetElement.style.margin = '0';
-            targetElement.style.marginLeft = '0';
-            targetElement.style.marginRight = '0';
-            targetElement.style.width = `${WINDOW_WIDTH}px`;
-            targetElement.style.maxWidth = `${WINDOW_WIDTH}px`;
-            targetElement.style.boxSizing = 'border-box';
-          }
-
-          await new Promise((r) => setTimeout(r, 30));
-
-          const elementHeightPx = Math.max(
-            targetElement.scrollHeight,
-            targetElement.offsetHeight,
-            400
-          );
-
-          // Perfectly uniform margins on all four sides: top == bottom, left == right
-          const CARD_WIDTH_PX = isProposal ? 800 : WINDOW_WIDTH;
-          const marginMm = isProposal ? 9 : 8; // uniform margin
-          const pdfWidthMm = 210;
-          const printableWidthMm = pdfWidthMm - (marginMm * 2);
-          const contentHeightMm = (elementHeightPx / CARD_WIDTH_PX) * printableWidthMm;
-          const pdfHeightMm = Math.max(130, Math.ceil(contentHeightMm + (marginMm * 2) + 2));
+          // Convert px to mm (1px = 0.264583mm at standard 96 DPI)
+          const pxToMm = 0.264583;
+          // Equal 20px margins on all 4 sides: Top == Bottom, Left == Right
+          const padPx = 20;
+          const padMm = padPx * pxToMm; // ~5.29mm
+          const totalPdfWidthMm = (targetWidth + padPx * 2) * pxToMm;
+          const totalPdfHeightMm = (cardH + padPx * 2) * pxToMm;
 
           const opt = {
-            margin: [marginMm, marginMm, marginMm, marginMm],
+            margin: [padMm, padMm, padMm, padMm], // Equal on all 4 sides
             filename: fileName,
-            image: { type: 'jpeg', quality: 0.95 },
+            image: { type: 'jpeg', quality: 0.98 },
             html2canvas: {
               scale: 1.8,
               useCORS: true,
               letterRendering: true,
               logging: false,
-              backgroundColor: '#ffffff',
-              width: WINDOW_WIDTH,
-              windowWidth: WINDOW_WIDTH,
-              x: 0,
-              y: 0,
-              scrollX: 0,
-              scrollY: 0
+              backgroundColor: '#ffffff'
             },
-            jsPDF: { unit: 'mm', format: [pdfWidthMm, pdfHeightMm], orientation: 'portrait' },
+            jsPDF: {
+              unit: 'mm',
+              format: [totalPdfWidthMm, totalPdfHeightMm],
+              orientation: 'portrait'
+            },
             pagebreak: { mode: 'avoid-all' }
           };
 
-          const pdfBlob = await html2pdf().set(opt).from(targetElement).output('blob');
+          const pdfBlob = await html2pdf().set(opt).from(card).output('blob');
           resolve(pdfBlob);
         } catch (err) {
           console.error('PDF render error:', err);
           reject(err);
         } finally {
-          staging.remove();
+          container.remove();
           styleEl.remove();
         }
-      }, 25);
+      }, 30);
     });
   });
 }
